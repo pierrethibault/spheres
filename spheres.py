@@ -5,41 +5,33 @@ Pack spheres in a cylindrical container.
 import numpy as np
 from numpy import pi
 import bisect
-import sys
 import os
 import gzip
 import time
 
 SMALL = 1e-6
 
+
 class Sph:
-    def __init__(self,r):
+    def __init__(self, r):
         self.r = r
-    def __lt__(self,b):
+
+    def __lt__(self, b):
         # Sort using the z coordinate
         return self.r[2] < b.r[2]
-
-"""
-    @property
-    def r(self):
-        if (self._r[0]<0):
-            print('-')
-        return self._r
-
-    @r.setter
-    def r(self, x):
-        self._r = x
-"""
 
 
 def norm(x):
     return np.sqrt(norm2(x))
 
+
 def norm2(x):
-    return np.inner(x,x)
+    return np.inner(x, x)
+
 
 def debug(x):
     print(x)
+
 
 def verbose(x):
     print(x)
@@ -48,13 +40,39 @@ def verbose(x):
 class Spheres:
 
     def __init__(self, sph_rad, cyl_rad, cyl_height, dx=1., ior=1., fill_now=False):
-        """\
-        Constructor.
+        """
+        Spheres in a cylinder.
+
         sph_rad = sphere radius
         cyl_rad = cylinder (container) radius
         cyl_height = cylinder (container) height
         dx = voxel dimensions for slice generations
         ior = index of refraction difference with surrounding (default 1.)
+
+        Notes:
+            - Sphere all have the same radius
+            - Slow implementation
+            - Gives only sagittal slices and projections.
+
+        Example:
+        A 50 micron diameter container with 1 micron spheres. (.1 micron pixel size)
+
+        S = Spheres(sph_rad=.5e-6,
+                    cyl_rad=25e-6,
+                    cyl_height=100e-6,
+                    dx=.1e-6,
+                    fill_now=True)
+        # Or with fill_now=False, one needs then to call `S.stack_fill()`.
+
+        S.get_slice(0.) -> central (sagittal) slice
+        S.get_slice(-10e-6) -> sagittal slice 10 micron off the center
+        S.get_proj() -> integrated density
+        S.to_angle(angle) -> rotate the spheres
+
+        To generate a tomographic dataset (pseudo-code):
+        for angle in some_angle_list:
+            S.to_angle(angle)
+            proj.append(S.get_proj())
         """
         self.sph_rad = sph_rad
         self.cyl_height = cyl_height
@@ -73,32 +91,27 @@ class Spheres:
 
         R = self.sph_rad        # sphere radius
         D = 2*R                 # sphere diameter
-        R2 = R*R
         D2 = D*D
-        cylR = self.cyl_rad #+ 2*self.sph_rad  # enlarged radius to make sure filling is complete
+        cylR = self.cyl_rad
         cylR2 = cylR**2
-        cylH = 3*R                # height of first container (for initial random distribution)
+
+        # height of first container (for initial random distribution)
+        cylH = 3*R
 
         thresh_dist = SMALL*R
         D2p = D2 + thresh_dist
         D2m = D2 - thresh_dist
 
         # First generate bottom layer randomly
-        #debug('Generating initial layer...')
+        # debug('Generating initial layer...')
         new_container = Spheres(R, cylR, cylH, self.dx, fill_now=False)
         new_container.random_fill(Ntry_limit=5000)
         pos = new_container.pos
         del new_container
         pos.sort()
-        #debug('Done.')
 
-        #for x in pos:
-        #    x.r[2] -= (cylH - R)
-        #zmin = -(cylH-2*R)
         zmin = 0
-
         zmax = self.cyl_height
-        final_offset = np.array([self.cyl_rad -cylR, self.cyl_rad-cylR, 0])
 
         # Dictionary of nearest neighbors
         neighbor = {}
@@ -111,26 +124,29 @@ class Spheres:
         for r1 in pos:
             nn = []
             for r2 in pos:
-                if r2 is r1: continue
+                if r2 is r1:
+                    continue
                 if norm2(r2.r - r1.r) < 4*D2p:
                     nn.append(r2)
 
                 for r3 in pos:
-                    if (r3 is r1) or (r3 is r2): continue
-                    r = fourth_kiss(r1.r,r2.r,r3.r,R)
+                    if (r3 is r1) or (r3 is r2):
+                        continue
+                    r = fourth_kiss(r1.r, r2.r, r3.r, R)
                     if r:
                         new_pt = Sph(r[0])
 
                         # Skip if this is a duplicate
-                        if any( [norm2(new_pt.r - x.r) < thresh_dist for x in next_pos]): continue
+                        if any([norm2(new_pt.r - x.r) < thresh_dist for x in next_pos]):
+                            continue
 
                         # Add if no overlap with other positions
-                        if all( [ (norm2(x.r-r[0]) > D2m) for x in pos + next_pos]):
+                        if all([(norm2(x.r-r[0]) > D2m) for x in pos + next_pos]):
                             bisect.insort(next_pos, new_pt)
-                            #debug('next_pos : %d' % len(next_pos))
-                        if all( [ (norm2(x.r-r[1]) > D2m) for x in pos + next_pos]):
+
+                        if all([(norm2(x.r-r[1]) > D2m) for x in pos + next_pos]):
                             bisect.insort(next_pos, Sph(r[1]))
-                            #debug('next_pos : %d' % len(next_pos))
+
             neighbor[r1] = nn
         verbose('Found {0} initial sites'.format(len(next_pos)))
 
@@ -141,7 +157,8 @@ class Spheres:
 
             if len(pos) % 10 == 0:
                 time_info.append(time.time())
-                verbose('{0} spheres / {1} sites [{2}]'.format(len(pos), len(next_pos), time.ctime()))
+                verbose(
+                    '{0} spheres / {1} sites [{2}]'.format(len(pos), len(next_pos), time.ctime()))
 
             if not next_pos:
                 break
@@ -159,7 +176,8 @@ class Spheres:
 
             # Remove the possible positions that overlap with this new choice
             len_before = len(next_pos)
-            next_pos = [xn for xn in next_pos if (norm2(new_sphere.r - xn.r) > D2m)]
+            next_pos = [xn for xn in next_pos if (
+                norm2(new_sphere.r - xn.r) > D2m)]
             len_after = len(next_pos)
             removed = len_before - len_after
             verbose(f"{removed} overlapping sites removed (out of {len_before})")
@@ -176,21 +194,23 @@ class Spheres:
                     neighbor[r1].append(new_sphere)
             neighbor[new_sphere] = nn
 
-            verbose(f"New sphere at ({new_sphere.r[0]:.02f}, {new_sphere.r[1]:.02f}, {new_sphere.r[2]:.02f})")
-            bisect.insort(pos, new_sphere)   # Keep sphere positions sorted vertically
+            verbose(
+                f"New sphere at ({new_sphere.r[0]:.02f}, {new_sphere.r[1]:.02f}, {new_sphere.r[2]:.02f})")
+            # Keep sphere positions sorted vertically
+            bisect.insort(pos, new_sphere)
 
             # Find new sites
             for r1 in neighbor[new_sphere]:
                 for r2 in neighbor[new_sphere]:
-                    if r1 is r2: continue
+                    if r1 is r2:
+                        continue
                     r = fourth_kiss(r1.r, r2.r, new_sphere.r, R)
                     if r:
-                        if all( [ (norm2(x.r - r[0]) > D2m) for x in set(neighbor[r1] + neighbor[r2] + neighbor[new_sphere])]):
+                        if all([(norm2(x.r - r[0]) > D2m) for x in set(neighbor[r1] + neighbor[r2] + neighbor[new_sphere])]):
                             bisect.insort(next_pos, Sph(r[0]))
-                            #debug('next_pos : %d' % len(next_pos))
-                        if all( [ (norm2(x.r - r[1]) > D2m) for x in set(neighbor[r1] + neighbor[r2] + neighbor[new_sphere])]):
+
+                        if all([(norm2(x.r - r[1]) > D2m) for x in set(neighbor[r1] + neighbor[r2] + neighbor[new_sphere])]):
                             bisect.insort(next_pos, Sph(r[1]))
-                            #debug('next_pos : %d' % len(next_pos))
 
             added = len(next_pos) - len_after
             verbose(f"Found {added} new sites.")
@@ -198,46 +218,20 @@ class Spheres:
             # Add the new sphere to the stack
             # pos.append(new_sphere)
 
-
         # Refilter to make sure all spheres are really within the container
-        #self.pos = [x for x in pos if ( (x[2] < self.cyl_height-R) and (x[2] > R) )]
-        #for x in pos:
-        #    x.r += final_offset
-        self.pos = [x for x in pos if ( (x.r[2] >= R) and (x.r[2] <= self.cyl_height-R) and (norm(x.r[:2]) < (self.cyl_rad - R)))]
-        self.pos1 = pos
-
-        verbose('There were {0} spheres in the list, after removing those that spilled over, there are {1}.'.format(len(pos), len(self.pos)))
+        self.pos = [x for x in pos if ((x.r[2] >= R)
+                    and (x.r[2] <= self.cyl_height-R)
+                    and (norm(x.r[:2]) < (self.cyl_rad - R)))]
+        verbose('There were {0} spheres in the list, after removing those that spilled over, there are {1}.'.format(
+            len(pos), len(self.pos)))
         self.time_info = time_info
         cyl_vol = pi * self.cyl_height * self.cyl_rad**2
         sph_vol = 4*pi*self.sph_rad**3 / 3
         N = len(self.pos)
         density = N*sph_vol/cyl_vol
         verbose("Stacking complete.")
-        verbose(f"There are {N} spheres in the container (density = {density:.04f})")
-
-
-    def debug_show(self, next_pos=None):
-        try:
-            import matplotlib.axes3d as p3
-        except:
-            from mpl_toolkits.mplot3d import Axes3D
-        import pylab as P
-
-        fig=P.figure()
-        ax = Axes3D(fig)
-
-        ps = np.asarray([x.r for x in self.pos])
-        ax.scatter3D(ps[:,0],ps[:,1],ps[:,2])
-
-        if next_pos is not None:
-            pn = np.asarray([x.r for x in next_pos])
-            ax.hold(True)
-            ax.scatter3D(pn[:,0],pn[:,1],pn[:,2],c='r')
-
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('Z')
-        P.show()
+        verbose(
+            f"There are {N} spheres in the container (density = {density:.04f})")
 
     def random_fill(self, Ntry_limit=None):
         """\
@@ -256,8 +250,8 @@ class Spheres:
             Ntry_limit = Nmax
 
         # Container dimensions
-        box = np.asarray([2*(self.cyl_rad-self.sph_rad), 2*(self.cyl_rad-self.sph_rad), self.cyl_height-2*self.sph_rad])
-        box_offset = self.sph_rad * np.ones(3)
+        box = np.asarray([2*(self.cyl_rad-self.sph_rad), 2
+                         * (self.cyl_rad-self.sph_rad), self.cyl_height-2*self.sph_rad])
 
         pos = []
         Ntry = 0
@@ -286,23 +280,24 @@ class Spheres:
                 Ntry += 1
             else:
                 pos.append(Sph(x))
-                verbose(f"New sphere at ({x[0]:.02f}, {x[1]:.02f}, {x[2]:.02f})! (tried {Ntry} times)")
+                verbose(
+                    f"New sphere at ({x[0]:.02f}, {x[1]:.02f}, {x[2]:.02f})! (tried {Ntry} times)")
                 Ntry = 0
 
         self.angle = 0.
-        #for x in pos: x.r += box_offset
         self.pos = pos
         N = len(pos)
         density = N*sph_vol/cyl_vol
         verbose("Filling complete.")
-        verbose(f"There are {N} spheres in the container (density = {density:.04f})")
+        verbose(
+            f"There are {N} spheres in the container (density = {density:.04f})")
 
     def save_coords(self, filename):
         """\
         Save the spheres coordinates (rescaled such that the radius is 1) in a text file.
         """
         filename = os.path.abspath(os.path.expanduser(filename)) + '.gz'
-        with gzip.open(filename,'wb') as f:
+        with gzip.open(filename, 'wb') as f:
             for x in self.pos:
                 f.write(b'%.12e   %.12e   %.12e\n' % tuple(x.r / self.sph_rad))
             verbose(f'Sphere coordinates written to {filename}')
@@ -325,14 +320,16 @@ class Spheres:
         # Check if container size is OK
         max_coords = pts.max(axis=0)
         cyl_rad = self.sph_rad + np.ceil(max_coords[0])
-        cyl_height = self.sph_rad  + np.ceil(max_coords[2])
+        cyl_height = self.sph_rad + np.ceil(max_coords[2])
         if cyl_rad != self.cyl_rad:
-            verbose(f'Loaded coordinates indicate that the cylinder radius should be {cyl_rad}')
+            verbose(
+                f'Loaded coordinates indicate that the cylinder radius should be {cyl_rad}')
             verbose(f'instead of {self.cyl_rad}')
             verbose(f'Changing the internal value to {cyl_rad}.')
             self.cyl_rad = cyl_rad
         if cyl_height != self.cyl_height:
-            verbose(f'Loaded coordinates indicate that the cylinder height should be {cyl_height}')
+            verbose(
+                f'Loaded coordinates indicate that the cylinder height should be {cyl_height}')
             verbose(f'instead of {self.cyl_height}')
             verbose(f'Changing the internal value to {cyl_height}')
             self.cyl_height = cyl_height
@@ -346,8 +343,7 @@ class Spheres:
         sinth = np.sin(pi*angle/180)
         costh = np.cos(pi*angle/180)
         transf = np.matrix(np.eye(3))
-        transf[:2,:2] = [[costh, sinth],[-sinth, costh]]
-        new_pos = []
+        transf[:2, :2] = [[costh, sinth], [-sinth, costh]]
         for x in self.pos:
             x.r = (x.r * transf).A1
 
@@ -372,7 +368,7 @@ class Spheres:
             self.dx = dx
 
         # create output array
-        sh = ( int(2*self.cyl_rad/self.dx), int(self.cyl_height/self.dx) )
+        sh = (int(2*self.cyl_rad/self.dx), int(self.cyl_height/self.dx))
         if out is None:
             out = np.zeros(sh)
 
@@ -380,10 +376,10 @@ class Spheres:
         l_offset = int(np.ceil(self.sph_rad/self.dx))
 
         # Size of local array
-        sh1 = ( 2*l_offset + 1, 2*l_offset + 1)
+        sh1 = (2*l_offset + 1, 2*l_offset + 1)
 
         # Coordinates
-        xx,zz = np.indices(sh1)
+        xx, zz = np.indices(sh1)
 
         # Slice position (voxel units)
         y_slice = dist/self.dx
@@ -391,7 +387,7 @@ class Spheres:
         R = self.sph_rad/self.dx
         R2 = R**2
         for xs in self.pos:
-            x,y,z = xs.r / self.dx
+            x, y, z = xs.r / self.dx
             s = abs(y-y_slice)
             x += self.cyl_rad / self.dx
             if s >= R:
@@ -402,11 +398,12 @@ class Spheres:
             rslice2 = R2 - s**2
 
             # local array corner position
-            lpos_x, lpos_z = int(np.floor(x)-l_offset), int(np.floor(z)-l_offset)
+            lpos_x, lpos_z = int(
+                np.floor(x)-l_offset), int(np.floor(z)-l_offset)
             # sphere center in the local array
             lctr_x, lctr_z = x-lpos_x, z-lpos_z
-            #lslice = ( (xx - lctr_x)**2 + (zz - lctr_z)**2 ) < rslice2
-            out[lpos_x:(lpos_x+sh1[0]),lpos_z:(lpos_z+sh1[1])] += ( (xx - lctr_x)**2 + (zz - lctr_z)**2 ) < rslice2
+            out[lpos_x:(lpos_x+sh1[0]), lpos_z:(lpos_z+sh1[1])
+                ] += ((xx - lctr_x)**2 + (zz - lctr_z)**2) < rslice2
 
         return self.ior * out
 
@@ -420,7 +417,7 @@ class Spheres:
         if dx is not None:
             self.dx = dx
         # create output array
-        sh = ( int(2*self.cyl_rad/self.dx), int(self.cyl_height/self.dx) )
+        sh = (int(2*self.cyl_rad/self.dx), int(self.cyl_height/self.dx))
         if out is None:
             out = np.zeros(sh)
 
@@ -428,33 +425,30 @@ class Spheres:
         l_offset = int(np.ceil(self.sph_rad/self.dx))
 
         # Size of local array
-        sh1 = ( 2*l_offset + 1, 2*l_offset + 1)
+        sh1 = (2*l_offset + 1, 2*l_offset + 1)
 
         # Coordinates
-        xx,zz = np.indices(sh1)
+        xx, zz = np.indices(sh1)
 
         # Sphere radius (voxel units)
         R = self.sph_rad/self.dx
         R2 = R**2
 
         for xs in self.pos:
-            x,y,z = xs.r / self.dx
+            x, y, z = xs.r / self.dx
             x += self.cyl_rad / self.dx
             # local array corner position
-            lpos_x, lpos_z = int(np.floor(x)-l_offset), int(np.floor(z)-l_offset)
+            lpos_x, lpos_z = int(
+                np.floor(x)-l_offset), int(np.floor(z)-l_offset)
             # sphere center in the local array
             lctr_x, lctr_z = x-lpos_x, z-lpos_z
             r2pos = R2 - (xx - lctr_x)**2 - (zz - lctr_z)**2
-            if out[lpos_x:(lpos_x+sh1[0]),lpos_z:(lpos_z+sh1[1])].shape != sh1:
+            if out[lpos_x:(lpos_x+sh1[0]), lpos_z:(lpos_z+sh1[1])].shape != sh1:
                 1/0
-            out[lpos_x:(lpos_x+sh1[0]),lpos_z:(lpos_z+sh1[1])] +=  2*np.sqrt(r2pos * (r2pos>0))
+            out[lpos_x:(lpos_x+sh1[0]), lpos_z:(lpos_z+sh1[1])
+                ] += 2*np.sqrt(r2pos * (r2pos > 0))
 
         return self.ior * out
-
-
-    #def __iter__(self):
-    #    for y in np.arange(0., 2*self.cyl_rad/self.dx, self.dx):
-    #        yield self.get_slice(y - self.cyl_rad)
 
     def __getitem__(self, i):
         """\
@@ -480,7 +474,8 @@ class Spheres:
             out += "total number of spheres = %d" % len(self.pos)
         return out
 
-def fourth_kiss(r1,r2,r3,radius):
+
+def fourth_kiss(r1, r2, r3, radius):
     """\
     returns the two position vectors of a sphere of given radius which kisses at once
     all the spheres at positions r1,r2 and r3. None is returned if this is impossible.
@@ -505,12 +500,12 @@ def fourth_kiss(r1,r2,r3,radius):
     if D*D < d2:
         return None
 
-    l = np.sqrt(D*D - d2)
+    dl = np.sqrt(D*D - d2)
 
-    uperp = np.cross(s2,s3)
+    uperp = np.cross(s2, s3)
     uperp /= norm(uperp)
 
-    r4a = r1 + d + uperp*l
-    r4b = r1 + d - uperp*l
+    r4a = r1 + d + uperp*dl
+    r4b = r1 + d - uperp*dl
 
-    return (r4a,r4b)
+    return (r4a, r4b)
